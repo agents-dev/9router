@@ -18,6 +18,14 @@ import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+import { FILTERS as SUGGESTED_MODEL_FILTERS } from "@/app/api/providers/suggested-models/filters.js";
+
+const NO_AUTH_MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
+const noAuthModelCache = new Map();
+
+export function clearNoAuthModelCache() {
+  noAuthModelCache.clear();
+}
 
 // Per-provider live model resolvers. Each receives a connection record and
 // returns { models: [{ id, name? }, ...] } | null on failure.
@@ -128,6 +136,46 @@ const parseOpenAIStyleModels = (data) => {
   if (Array.isArray(data)) return data;
   return data?.data || data?.models || data?.results || [];
 };
+
+async function fetchNoAuthModels(provider) {
+  const fetcher = provider?.modelsFetcher;
+  if (!provider?.noAuth || provider?.hidden || !fetcher?.url || !fetcher?.type) return [];
+
+  const filter = SUGGESTED_MODEL_FILTERS[fetcher.type];
+  if (typeof filter !== "function") return [];
+
+  const cached = noAuthModelCache.get(fetcher.url);
+  if (cached && cached.expiresAt > Date.now()) return cached.models;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    let response;
+    try {
+      response = await fetch(fetcher.url, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    if (!response.ok) return [];
+
+    const payload = await response.json();
+    const rawModels = parseOpenAIStyleModels(payload);
+    const models = filter(rawModels).filter(
+      (model) => typeof model?.id === "string" && model.id.trim() !== "",
+    );
+    noAuthModelCache.set(fetcher.url, {
+      models,
+      expiresAt: Date.now() + NO_AUTH_MODEL_CACHE_TTL_MS,
+    });
+    return models;
+  } catch {
+    return [];
+  }
+}
 
 // Header sent by fetchCompatibleModelIds to detect cross-instance /models fetches
 // and break recursive loops between 9router instances connected to each other.
@@ -247,10 +295,12 @@ export async function buildModelsList(kindFilter, options = {}) {
   // cross-instance recursive loops.
   const skipDynamicFetch = options.skipDynamicFetch === true;
   let connections = [];
+  let dbAvailable = true;
   try {
     connections = await getProviderConnections();
     connections = connections.filter(c => c.isActive !== false);
   } catch (e) {
+    dbAvailable = false;
     console.log("Could not fetch providers, returning all models");
   }
 
@@ -306,8 +356,9 @@ export async function buildModelsList(kindFilter, options = {}) {
     models.push(entry);
   }
 
-  if (connections.length === 0) {
-    // DB unavailable -> return static models, filtered by per-model kind
+  if (!dbAvailable) {
+    // The static catalog is an emergency fallback only. A healthy empty DB
+    // must not advertise hundreds of placeholder models that cannot be routed.
     const aliasToProviderId = Object.fromEntries(
       Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
     );
@@ -342,6 +393,20 @@ export async function buildModelsList(kindFilter, options = {}) {
       });
     }
   } else {
+    if (connections.length === 0 && kindFilter.includes(LLM_KIND)) {
+      for (const customModel of customModels) {
+        const providerAlias = customModel?.providerAlias;
+        const modelId = typeof customModel?.id === "string" ? customModel.id.trim() : "";
+        const kind = getModelKind(customModel) || LLM_KIND;
+        if (!providerAlias || !modelId || kind !== LLM_KIND || isDisabled(providerAlias, modelId)) continue;
+        models.push({
+          id: `${providerAlias}/${modelId}`,
+          object: "model",
+          owned_by: providerAlias,
+        });
+      }
+    }
+
     for (const [providerId, conn] of activeConnectionByProvider.entries()) {
       if (!providerMatchesKinds(providerId, kindFilter)) continue;
 
@@ -505,6 +570,46 @@ export async function buildModelsList(kindFilter, options = {}) {
           kind: "webFetch",
           owned_by: outputAlias,
         });
+      }
+    }
+
+    // Public no-auth providers are usable without a connection record. Expose
+    // only their current upstream catalog; never substitute stale static seeds.
+    if (!skipDynamicFetch) {
+      const noAuthProviders = Object.values(AI_PROVIDERS).filter((provider) => {
+        if (!provider?.noAuth) return false;
+        const activeConnection = activeConnectionByProvider.get(provider.id);
+        const enabledModels = activeConnection?.providerSpecificData?.enabledModels;
+        // A curated non-empty list is intentional and remains authoritative.
+        return !Array.isArray(enabledModels) || enabledModels.length === 0;
+      });
+      const liveCatalogs = await Promise.all(
+        noAuthProviders.map(async (provider) => ({
+          provider,
+          models: await fetchNoAuthModels(provider),
+        })),
+      );
+
+      for (const { provider, models: liveModels } of liveCatalogs) {
+        if (!providerMatchesKinds(provider.id, kindFilter)) continue;
+        const activeConnection = activeConnectionByProvider.get(provider.id);
+        const outputAlias = (
+          activeConnection?.providerSpecificData?.prefix
+          || getProviderAlias(provider.id)
+          || provider.alias
+          || provider.id
+        ).trim();
+        const staticAlias = PROVIDER_ID_TO_ALIAS[provider.id] || provider.id;
+        for (const liveModel of liveModels) {
+          const modelId = liveModel.id.trim();
+          if (!kindFilter.includes(modelKind(liveModel))) continue;
+          if (isDisabled(outputAlias, modelId) || isDisabled(staticAlias, modelId)) continue;
+          models.push({
+            id: `${outputAlias}/${modelId}`,
+            object: "model",
+            owned_by: outputAlias,
+          });
+        }
       }
     }
   }
