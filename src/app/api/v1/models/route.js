@@ -139,7 +139,7 @@ const parseOpenAIStyleModels = (data) => {
 
 async function fetchNoAuthModels(provider) {
   const fetcher = provider?.modelsFetcher;
-  if (!provider?.noAuth || provider?.hidden || !fetcher?.url || !fetcher?.type) return [];
+  if ((!provider?.noAuth && !fetcher?.publicNoAuth) || provider?.hidden || !fetcher?.url || !fetcher?.type) return [];
 
   const filter = SUGGESTED_MODEL_FILTERS[fetcher.type];
   if (typeof filter !== "function") return [];
@@ -577,11 +577,11 @@ export async function buildModelsList(kindFilter, options = {}) {
     // only their current upstream catalog; never substitute stale static seeds.
     if (!skipDynamicFetch) {
       const noAuthProviders = Object.values(AI_PROVIDERS).filter((provider) => {
-        if (!provider?.noAuth) return false;
+        if (!provider?.noAuth && !provider?.modelsFetcher?.publicNoAuth) return false;
         const activeConnection = activeConnectionByProvider.get(provider.id);
         const enabledModels = activeConnection?.providerSpecificData?.enabledModels;
         // A curated non-empty list is intentional and remains authoritative.
-        return !Array.isArray(enabledModels) || enabledModels.length === 0;
+        return !provider.noAuth || !Array.isArray(enabledModels) || enabledModels.length === 0;
       });
       const liveCatalogs = await Promise.all(
         noAuthProviders.map(async (provider) => ({

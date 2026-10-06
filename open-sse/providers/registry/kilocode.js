@@ -41,7 +41,11 @@ export default {
   // requires a fetcher + passthroughModels, matching how openrouter.js is set up.
   // Without these, only the 8 hardcoded models appear in the combo model picker,
   // hiding dynamic models like cohere/north-mini-code:free and poolside/laguna-m.1:free.
-  modelsFetcher: { url: "https://api.kilo.ai/api/gateway/models", type: "openrouter-free" },
+  modelsFetcher: {
+    url: "https://api.kilo.ai/api/gateway/models",
+    type: "kilocode-free",
+    publicNoAuth: true,
+  },
   passthroughModels: true,
   oauth: {
     apiBaseUrl: "https://api.kilo.ai",

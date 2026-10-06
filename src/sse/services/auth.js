@@ -2,7 +2,7 @@ import { getProviderConnections, validateApiKey, updateProviderConnection, getSe
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
-import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
+import { resolveProviderId, AI_PROVIDERS, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -41,8 +41,15 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
     const providerId = resolveProviderId(provider);
 
+    // Some OAuth providers also expose a narrowly-scoped public model tier.
+    // Only those live-catalog models get a virtual public connection; all
+    // other models continue through the normal stored-credential path.
+    const publicModelAccess = AI_PROVIDERS[providerId]?.modelsFetcher?.publicNoAuth === true
+      && typeof model === "string"
+      && model.endsWith(":free");
+
     // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
-    if (FREE_PROVIDERS[providerId]?.noAuth) {
+    if (FREE_PROVIDERS[providerId]?.noAuth || publicModelAccess) {
       const settings = await getSettings();
       const override = (settings.providerStrategies || {})[providerId] || {};
       const strategy = override.rotateStrategy || "none";
@@ -59,6 +66,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         isActive: true,
         accessToken: "public",
         providerSpecificData: {
+          publicAccess: publicModelAccess,
           connectionProxyEnabled: resolvedProxy.connectionProxyEnabled,
           connectionProxyUrl: resolvedProxy.connectionProxyUrl,
           connectionNoProxy: resolvedProxy.connectionNoProxy,

@@ -24,14 +24,19 @@ describe("/v1/models live no-auth catalogs", () => {
   it("uses live OpenCode free models for a healthy empty database", async () => {
     localDb.getProviderConnections.mockResolvedValue([]);
     vi.stubGlobal("fetch", vi.fn(async (url) => {
-      expect(url).toBe("https://opencode.ai/zen/v1/models");
-      return new Response(JSON.stringify({
-        data: [
-          { id: "deepseek-live-free" },
-          { id: "paid-placeholder" },
-          { id: "big-pickle" },
-        ],
-      }));
+      if (url === "https://opencode.ai/zen/v1/models") {
+        return new Response(JSON.stringify({
+          data: [
+            { id: "deepseek-live-free" },
+            { id: "paid-placeholder" },
+            { id: "big-pickle" },
+          ],
+        }));
+      }
+      if (url === "https://api.kilo.ai/api/gateway/models") {
+        return new Response(JSON.stringify({ data: [] }));
+      }
+      throw new Error(`unexpected URL: ${url}`);
     }));
 
     const models = await buildModelsList(["llm"]);
@@ -42,6 +47,28 @@ describe("/v1/models live no-auth catalogs", () => {
     expect(ids.length).toBeLessThan(10);
   });
 
+  it("exposes only live Kilo :free models without an OAuth connection", async () => {
+    localDb.getProviderConnections.mockResolvedValue([]);
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      if (url === "https://api.kilo.ai/api/gateway/models") {
+        return new Response(JSON.stringify({
+          data: [
+            { id: "stepfun/step-3.7-flash:free", name: "Step Free" },
+            { id: "poolside/laguna-s-2.1:free", name: "Laguna Free" },
+            { id: "deepseek/deepseek-v4-flash", name: "DeepSeek Paid" },
+          ],
+        }));
+      }
+      return new Response(JSON.stringify({ data: [] }));
+    }));
+
+    const ids = (await buildModelsList(["llm"])).map((model) => model.id);
+
+    expect(ids).toContain("kc/stepfun/step-3.7-flash:free");
+    expect(ids).toContain("kc/poolside/laguna-s-2.1:free");
+    expect(ids).not.toContain("kc/deepseek/deepseek-v4-flash");
+  });
+
   it("merges the live OpenCode catalog for an active connection with no curated models", async () => {
     localDb.getProviderConnections.mockResolvedValue([{
       id: "opencode-1",
@@ -49,8 +76,10 @@ describe("/v1/models live no-auth catalogs", () => {
       isActive: true,
       providerSpecificData: { prefix: "my-oc", enabledModels: [] },
     }]);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      data: [{ id: "active-live-free" }, { id: "paid-placeholder" }],
+    vi.stubGlobal("fetch", vi.fn(async (url) => new Response(JSON.stringify({
+      data: url === "https://opencode.ai/zen/v1/models"
+        ? [{ id: "active-live-free" }, { id: "paid-placeholder" }]
+        : [],
     }))));
 
     const models = await buildModelsList(["llm"]);
