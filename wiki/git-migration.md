@@ -8,3 +8,5 @@
 - Run Vitest with an explicit repository root and config. Compare failures against untouched upstream under the same runtime and dependencies before attributing them to the merge.
 - Include `AI_PROVIDERS` in provider-registry mocks used by credential-selection tests.
 - Keep inherited publishing workflows disabled until configuring fork-owned publishing destinations and secrets.
+- Run `npm install --no-audit --no-fund` after integrating dependency changes and before starting the dashboard. Restart the dev server and verify `/dashboard` and `/api/auth/status` return HTTP 200.
+- Keep `package-lock.json` untracked as configured in `.gitignore`. Regenerate a stale local lock with `npm install` when `npm ci` reports missing dependencies.
