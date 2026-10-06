@@ -5,6 +5,12 @@ const KNOWN_FREE_OPENCODE_MODELS = ["big-pickle"];
 const DEAD_FREE_OPENCODE_MODELS = new Set(["deepseek-v4-flash-free"]);
 
 export const FILTERS = {
+  "kilocode-free": (models) =>
+    models
+      .filter((m) => typeof m?.id === "string" && m.id.endsWith(":free"))
+      .map((m) => ({ id: m.id, name: m.name || m.id, contextLength: m.context_length }))
+      .sort((a, b) => (b.contextLength || 0) - (a.contextLength || 0)),
+
   "openrouter-free": (models) =>
     models
       .filter(

@@ -122,6 +122,9 @@ export class DefaultExecutor extends BaseExecutor {
       const normalized = baseUrl.replace(/\/$/, "");
       return `${normalized}/messages`;
     }
+    if (this.provider === "kilocode" && credentials?.providerSpecificData?.publicAccess === true) {
+      return "https://api.kilo.ai/api/gateway/v1/chat/completions";
+    }
     // gemini-format: build :streamGenerateContent / :generateContent path
     if (this.config.format === "gemini") {
       return `${this.config.baseUrl}/${model}:${stream ? "streamGenerateContent?alt=sse" : "generateContent"}`;

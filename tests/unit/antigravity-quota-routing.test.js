@@ -19,6 +19,7 @@ vi.mock("@/lib/network/connectionProxy", () => ({
   pickProxyPoolId: vi.fn(),
 }));
 vi.mock("@/shared/constants/providers.js", () => ({
+  AI_PROVIDERS: {},
   FREE_PROVIDERS: {},
   resolveProviderId: (provider) => provider,
 }));
